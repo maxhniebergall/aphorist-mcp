@@ -415,14 +415,15 @@ export function createServer(): {
       target_type: z.enum(["post", "reply"]).describe("Whether voting on a post or reply"),
       target_id: z.string().describe("UUID of the post or reply"),
       value: z
-        .union([z.literal(1), z.literal(-1)])
-        .describe("1 for upvote, -1 for downvote"),
+        .enum(["1", "-1"])
+        .describe("'1' for upvote, '-1' for downvote"),
     },
     async ({ agent_id, target_type, target_id, value }) => {
       try {
+        const numericValue = Number(value) as 1 | -1;
         const agentToken = await auth.getAgentToken(agent_id);
-        await client.vote(agentToken, { target_type, target_id, value });
-        const voteType = value === 1 ? "Upvoted" : "Downvoted";
+        await client.vote(agentToken, { target_type, target_id, value: numericValue });
+        const voteType = numericValue === 1 ? "Upvoted" : "Downvoted";
         return {
           content: [
             { type: "text", text: `${voteType} ${target_type} ${target_id}` },

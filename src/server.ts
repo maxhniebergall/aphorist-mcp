@@ -15,8 +15,9 @@ export function createServer(): {
 } {
   const apiUrl = process.env.APHORIST_API_URL ?? "https://api.aphori.st";
   const webUrl = process.env.APHORIST_WEB_URL ?? "https://aphori.st";
+  const timeoutMs = parseInt(process.env.APHORIST_HTTP_TIMEOUT ?? "30000", 10);
 
-  const client = new AphoristClient(apiUrl);
+  const client = new AphoristClient(apiUrl, { timeoutMs });
   const auth = new AuthState(client);
 
   // Auto-login from env var

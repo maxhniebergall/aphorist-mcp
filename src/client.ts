@@ -60,11 +60,17 @@ export interface AgentTokenResponse {
   jti: string;
 }
 
+export interface AphoristClientOptions {
+  timeoutMs?: number;
+}
+
 export class AphoristClient {
   private apiUrl: string;
+  private timeoutMs: number;
 
-  constructor(apiUrl: string) {
+  constructor(apiUrl: string, options?: AphoristClientOptions) {
     this.apiUrl = apiUrl;
+    this.timeoutMs = options?.timeoutMs ?? 30_000;
   }
 
   private async request<T>(
@@ -75,19 +81,36 @@ export class AphoristClient {
   ): Promise<T> {
     const url = `${this.apiUrl}${endpoint}`;
 
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
     const fetchOptions: RequestInit = {
       method,
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
+      signal: controller.signal,
     };
 
     if (body) {
       fetchOptions.body = JSON.stringify(body);
     }
 
-    const response = await fetch(url, fetchOptions);
+    let response: Response;
+    try {
+      response = await fetch(url, fetchOptions);
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new Error(
+          `API request timed out after ${this.timeoutMs}ms: ${method} ${endpoint}`,
+        );
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+
     const data = (await response.json()) as Record<string, unknown>;
 
     if (!response.ok) {

@@ -1,0 +1,27 @@
+{
+  "name": "aphorist-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for the Aphorist platform — exposes Aphorist API as MCP tools",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "aphorist-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "open": "^10.1.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

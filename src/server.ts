@@ -4,9 +4,100 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { AphoristClient } from "./client.js";
+import {
+  AphoristClient,
+  V3Subgraph,
+  V3INode,
+  V3SNode,
+  V3Edge,
+} from "./client.js";
 import { AuthState } from "./auth.js";
 import { browserLogin } from "./browser-login.js";
+
+// ── V3 Subgraph Formatter ─────────────────────────────────────────────
+
+function formatV3Subgraph(graph: V3Subgraph): string {
+  const sections: string[] = [];
+
+  // Build lookup maps
+  const iNodeMap = new Map<string, V3INode>();
+  for (const n of graph.i_nodes) iNodeMap.set(n.id, n);
+
+  const edgesBySNode = new Map<string, V3Edge[]>();
+  for (const e of graph.edges) {
+    const list = edgesBySNode.get(e.scheme_node_id) ?? [];
+    list.push(e);
+    edgesBySNode.set(e.scheme_node_id, list);
+  }
+
+  const valuesByINode = new Map<string, string[]>();
+  for (const v of graph.extracted_values) {
+    const list = valuesByINode.get(v.i_node_id) ?? [];
+    list.push(v.cluster_label ? `${v.text} [${v.cluster_label}]` : v.text);
+    valuesByINode.set(v.i_node_id, list);
+  }
+
+  // Claims (I-nodes)
+  if (graph.i_nodes.length > 0) {
+    const lines = graph.i_nodes.map((n) => {
+      const text = n.rewritten_text ?? n.content;
+      const values = valuesByINode.get(n.id);
+      const valStr = values ? `\n    Values: ${values.join(", ")}` : "";
+      return `  [${n.epistemic_type}] ${text} (confidence: ${n.extraction_confidence.toFixed(2)})${valStr}`;
+    });
+    sections.push(`## Claims\n${lines.join("\n")}`);
+  }
+
+  // Argument Schemes (S-nodes with resolved edges)
+  if (graph.s_nodes.length > 0) {
+    const lines = graph.s_nodes.map((s) => {
+      const edges = edgesBySNode.get(s.id) ?? [];
+      const resolve = (e: V3Edge) => {
+        const node = iNodeMap.get(e.node_id);
+        return node ? (node.rewritten_text ?? node.content) : `[${e.node_type}:${e.node_id.slice(0, 8)}]`;
+      };
+      const premises = edges.filter((e) => e.role === "premise").map(resolve);
+      const conclusions = edges.filter((e) => e.role === "conclusion").map(resolve);
+      const motivations = edges.filter((e) => e.role === "motivation").map(resolve);
+
+      const parts = [`  ${s.direction}${s.logic_type ? ` (${s.logic_type})` : ""} — confidence: ${s.confidence.toFixed(2)}`];
+      if (premises.length) parts.push(`    Premises: ${premises.join("; ")}`);
+      if (conclusions.length) parts.push(`    Conclusions: ${conclusions.join("; ")}`);
+      if (motivations.length) parts.push(`    Motivations: ${motivations.join("; ")}`);
+      if (s.fallacy_type) parts.push(`    Fallacy: ${s.fallacy_type} — ${s.fallacy_explanation}`);
+      if (s.gap_detected) parts.push(`    ⚠ Gap detected`);
+      return parts.join("\n");
+    });
+    sections.push(`## Argument Schemes\n${lines.join("\n\n")}`);
+  }
+
+  // Missing Premises (Enthymemes)
+  if (graph.enthymemes.length > 0) {
+    const lines = graph.enthymemes.map(
+      (e) => `  - ${e.content} (probability: ${e.probability.toFixed(2)}, status: ${e.status})`,
+    );
+    sections.push(`## Missing Premises\n${lines.join("\n")}`);
+  }
+
+  // Socratic Questions
+  if (graph.socratic_questions.length > 0) {
+    const lines = graph.socratic_questions.map(
+      (q) => `  - ${q.question}${q.resolved ? " [resolved]" : ""}`,
+    );
+    sections.push(`## Socratic Questions\n${lines.join("\n")}`);
+  }
+
+  // Summary
+  const counts = [
+    `${graph.i_nodes.length} claims`,
+    `${graph.s_nodes.length} schemes`,
+    `${graph.enthymemes.length} missing premises`,
+    `${graph.socratic_questions.length} questions`,
+  ].join(", ");
+  sections.push(`---\nSummary: ${counts}`);
+
+  return sections.join("\n\n");
+}
 
 export function createServer(): {
   server: McpServer;
@@ -28,7 +119,7 @@ export function createServer(): {
 
   const server = new McpServer({
     name: "aphorist-mcp",
-    version: "0.1.0",
+    version: "0.2.0",
   });
 
   // ── Auth & Management Tools ─────────────────────────────────────────
@@ -143,7 +234,7 @@ export function createServer(): {
     "Browse the Aphorist post feed. Returns a paginated list of posts.",
     {
       sort: z
-        .enum(["hot", "new", "top", "rising", "controversial"])
+        .enum(["hot", "new", "top", "rising", "controversial", "following"])
         .optional()
         .describe("Sort order (default: hot)"),
       limit: z.number().min(1).max(100).optional().describe("Number of posts to return (default: 25)"),
@@ -211,13 +302,17 @@ export function createServer(): {
     "Get replies for an Aphorist post (threaded, paginated).",
     {
       post_id: z.string().describe("UUID of the post"),
+      sort: z
+        .enum(["top", "new", "controversial"])
+        .optional()
+        .describe("Sort order for replies (default: top)"),
       limit: z.number().min(1).max(100).optional().describe("Number of replies to return (default: 25)"),
       cursor: z.string().optional().describe("Pagination cursor"),
     },
-    async ({ post_id, limit, cursor }) => {
+    async ({ post_id, sort, limit, cursor }) => {
       try {
         const token = auth.requireUserToken();
-        const result = await client.getReplies(token, post_id, { limit, cursor });
+        const result = await client.getReplies(token, post_id, { sort, limit, cursor });
         const text = result.items
           .map(
             (r) =>
@@ -276,37 +371,145 @@ export function createServer(): {
   );
 
   server.tool(
-    "get_arguments",
-    "Get argument analysis (ADUs — claims and premises) for a post or reply.",
+    "get_argument_graph",
+    "Get the V3 argument hypergraph for a single post or reply. Returns claims (I-nodes), argument schemes (S-nodes), edges, missing premises (enthymemes), and Socratic questions.",
     {
-      source_type: z.enum(["post", "reply"]).describe("Whether to get ADUs for a post or a reply"),
+      source_type: z.enum(["post", "reply"]).describe("Whether to get the argument graph for a post or a reply"),
       source_id: z.string().describe("UUID of the post or reply"),
     },
     async ({ source_type, source_id }) => {
       try {
         const token = auth.requireUserToken();
-        const adus = await client.getArguments(token, source_type, source_id);
-        if (adus.length === 0) {
+        const graph = await client.getV3Source(token, source_type, source_id);
+        if (graph.i_nodes.length === 0) {
           return {
             content: [
               {
                 type: "text",
-                text: `No ADUs found for ${source_type} ${source_id}. Analysis may still be processing.`,
+                text: `No argument analysis found for ${source_type} ${source_id}. Use get_analysis_status to check progress, or trigger_analysis to start analysis.`,
               },
             ],
           };
         }
-        const text = adus
-          .map(
-            (a) =>
-              `[${a.adu_type.toUpperCase()}] "${a.text}"${a.canonical_claim_id ? ` (canonical: ${a.canonical_claim_id})` : ""}`,
-          )
-          .join("\n");
+        return { content: [{ type: "text", text: formatV3Subgraph(graph) }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text", text: `Failed to get argument graph: ${msg}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "get_thread_graph",
+    "Get the full V3 argument hypergraph for a post and all its replies, merged into a single graph.",
+    {
+      post_id: z.string().describe("UUID of the post"),
+    },
+    async ({ post_id }) => {
+      try {
+        const token = auth.requireUserToken();
+        const graph = await client.getV3Graph(token, post_id);
+        if (graph.i_nodes.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No argument analysis found for thread ${post_id}. Use trigger_analysis to start analysis.`,
+              },
+            ],
+          };
+        }
+        return { content: [{ type: "text", text: formatV3Subgraph(graph) }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text", text: `Failed to get thread graph: ${msg}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "get_analysis_status",
+    "Check the V3 argument analysis progress for a post or reply.",
+    {
+      source_type: z.enum(["post", "reply"]).describe("Source type"),
+      source_id: z.string().describe("UUID of the post or reply"),
+    },
+    async ({ source_type, source_id }) => {
+      try {
+        const token = auth.requireUserToken();
+        const status = await client.getV3Status(token, source_type, source_id);
+        const text = `Analysis status for ${source_type} ${source_id}: ${status.status}${status.completed_at ? ` (completed: ${status.completed_at})` : ""}`;
         return { content: [{ type: "text", text }] };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return {
-          content: [{ type: "text", text: `Failed to get arguments: ${msg}` }],
+          content: [{ type: "text", text: `Failed to get analysis status: ${msg}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "find_similar_claims",
+    "Find semantically similar claims (I-nodes) across the platform, enriched with source context.",
+    {
+      inode_id: z.string().describe("UUID of the I-node to find similar claims for"),
+    },
+    async ({ inode_id }) => {
+      try {
+        const token = auth.requireUserToken();
+        const results = await client.getV3Similar(token, inode_id);
+        if (results.length === 0) {
+          return { content: [{ type: "text", text: "No similar claims found." }] };
+        }
+        const text = results
+          .map((r) => {
+            const claim = r.i_node.rewritten_text ?? r.i_node.content;
+            const source = r.source_title ? ` (from "${r.source_title}" by ${r.source_author})` : "";
+            return `  [${r.i_node.epistemic_type}] ${claim} — similarity: ${r.similarity.toFixed(3)}${source}`;
+          })
+          .join("\n");
+        return { content: [{ type: "text", text: `## Similar Claims\n${text}` }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text", text: `Failed to find similar claims: ${msg}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "trigger_analysis",
+    "Manually trigger V3 argument analysis for a post or reply.",
+    {
+      source_type: z.enum(["post", "reply"]).describe("Source type"),
+      source_id: z.string().describe("UUID of the post or reply to analyze"),
+    },
+    async ({ source_type, source_id }) => {
+      try {
+        const token = auth.requireUserToken();
+        const status = await client.triggerV3Analysis(token, source_type, source_id);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Analysis triggered for ${source_type} ${source_id}. Status: ${status.status}`,
+            },
+          ],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text", text: `Failed to trigger analysis: ${msg}` }],
           isError: true,
         };
       }
@@ -359,7 +562,7 @@ export function createServer(): {
       target_adu_id: z
         .string()
         .optional()
-        .describe("UUID of a specific ADU this reply addresses"),
+        .describe("UUID of a V3 I-node (claim) this reply addresses"),
       quoted_text: z.string().optional().describe("Text being quoted"),
       quoted_source_type: z
         .enum(["post", "reply"])

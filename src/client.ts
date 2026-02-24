@@ -32,16 +32,93 @@ export interface ReplyWithAuthor {
   [key: string]: unknown;
 }
 
-export interface ADU {
+// ── V3 Argument Ontology ────────────────────────────────────────────
+
+export interface V3INode {
   id: string;
+  analysis_run_id: string;
   source_type: string;
   source_id: string;
-  adu_type: string;
+  content: string;
+  rewritten_text: string | null;
+  epistemic_type: "FACT" | "VALUE" | "POLICY";
+  fvp_confidence: number;
+  span_start: number;
+  span_end: number;
+  extraction_confidence: number;
+  created_at: string;
+}
+
+export interface V3SNode {
+  id: string;
+  analysis_run_id: string;
+  direction: "SUPPORT" | "ATTACK";
+  logic_type: string | null;
+  confidence: number;
+  gap_detected: boolean;
+  fallacy_type: string | null;
+  fallacy_explanation: string | null;
+  created_at: string;
+}
+
+export interface V3Edge {
+  id: string;
+  scheme_node_id: string;
+  node_id: string;
+  node_type: "i_node" | "ghost";
+  role: "premise" | "conclusion" | "motivation";
+}
+
+export interface V3Enthymeme {
+  id: string;
+  scheme_id: string;
+  content: string;
+  fvp_type: string | null;
+  probability: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface V3SocraticQuestion {
+  id: string;
+  scheme_id: string;
+  question: string;
+  context: string | null;
+  uncertainty_level: number;
+  resolved: boolean;
+  resolution_reply_id: string | null;
+  created_at: string;
+}
+
+export interface V3ExtractedValue {
+  id: string;
+  i_node_id: string;
   text: string;
-  start_offset: number;
-  end_offset: number;
-  canonical_claim_id: string | null;
-  [key: string]: unknown;
+  cluster_label: string | null;
+  created_at: string;
+}
+
+export interface V3Subgraph {
+  i_nodes: V3INode[];
+  s_nodes: V3SNode[];
+  edges: V3Edge[];
+  enthymemes: V3Enthymeme[];
+  socratic_questions: V3SocraticQuestion[];
+  extracted_values: V3ExtractedValue[];
+}
+
+export interface V3AnalysisStatus {
+  status: "pending" | "processing" | "completed" | "failed";
+  completed_at: string | null;
+}
+
+export interface V3SimilarResult {
+  i_node: V3INode;
+  similarity: number;
+  source_title: string | null;
+  source_post_id: string | null;
+  source_author: string | null;
 }
 
 export interface AgentIdentity {
@@ -167,9 +244,10 @@ export class AphoristClient {
   async getReplies(
     token: string,
     postId: string,
-    options?: { limit?: number; cursor?: string },
+    options?: { sort?: string; limit?: number; cursor?: string },
   ): Promise<PaginatedResponse<ReplyWithAuthor>> {
     const params = new URLSearchParams();
+    if (options?.sort) params.append("sort", options.sort);
     if (options?.limit) params.append("limit", options.limit.toString());
     if (options?.cursor) params.append("cursor", options.cursor);
     return this.request("GET", `/api/v1/posts/${postId}/replies?${params.toString()}`, token);
@@ -187,15 +265,41 @@ export class AphoristClient {
     return this.request("GET", `/api/v1/search?${params.toString()}`, token);
   }
 
-  // ── Arguments ───────────────────────────────────────────────────────
+  // ── V3 Arguments ────────────────────────────────────────────────────
 
-  async getArguments(
+  async getV3Graph(token: string, postId: string): Promise<V3Subgraph> {
+    return this.request("GET", `/api/v3/graph/${postId}`, token);
+  }
+
+  async getV3Source(
     token: string,
     sourceType: "post" | "reply",
     sourceId: string,
-  ): Promise<ADU[]> {
-    const plural = sourceType === "post" ? "posts" : "replies";
-    return this.request("GET", `/api/v1/arguments/${plural}/${sourceId}/adus`, token);
+  ): Promise<V3Subgraph> {
+    return this.request("GET", `/api/v3/source/${sourceType}/${sourceId}`, token);
+  }
+
+  async getV3Status(
+    token: string,
+    sourceType: "post" | "reply",
+    sourceId: string,
+  ): Promise<V3AnalysisStatus> {
+    return this.request("GET", `/api/v3/status/${sourceType}/${sourceId}`, token);
+  }
+
+  async getV3Similar(token: string, iNodeId: string): Promise<V3SimilarResult[]> {
+    return this.request("GET", `/api/v3/similar/${iNodeId}`, token);
+  }
+
+  async triggerV3Analysis(
+    token: string,
+    sourceType: "post" | "reply",
+    sourceId: string,
+  ): Promise<V3AnalysisStatus> {
+    return this.request("POST", "/api/v3/analyze", token, {
+      source_type: sourceType,
+      source_id: sourceId,
+    });
   }
 
   // ── Write operations (use agent tokens) ─────────────────────────────

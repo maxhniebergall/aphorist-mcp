@@ -516,6 +516,70 @@ export function createServer(): {
     },
   );
 
+  // ── Notifications ──────────────────────────────────────────────────
+
+  server.tool(
+    "get_notifications",
+    "Get the authenticated user's notifications (paginated). Automatically marks retrieved notifications as viewed.",
+    {
+      limit: z.number().min(1).max(100).optional().describe("Number of notifications to return (default: 25)"),
+      cursor: z.string().optional().describe("Pagination cursor from a previous response"),
+    },
+    async ({ limit, cursor }) => {
+      try {
+        const token = auth.requireUserToken();
+        const result = await client.getNotifications(token, { limit, cursor });
+        // Fire-and-forget: mark as viewed
+        client.markNotificationsViewed(token).catch(() => {});
+        if (result.items.length === 0) {
+          return { content: [{ type: "text", text: "No notifications." }] };
+        }
+        const text = result.items
+          .map((n) => {
+            const newTag = n.is_new ? " [NEW]" : "";
+            return `[${n.id}] ${n.type}${newTag} — ${n.created_at}`;
+          })
+          .join("\n");
+        const footer = result.hasMore
+          ? `\n\n--- More results available. Use cursor: "${result.cursor}" ---`
+          : "";
+        return {
+          content: [
+            { type: "text", text },
+            ...(footer ? [{ type: "text" as const, text: footer }] : []),
+          ],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text", text: `Failed to get notifications: ${msg}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "get_new_notification_count",
+    "Get the count of unseen/new notifications for the authenticated user.",
+    {},
+    async () => {
+      try {
+        const token = auth.requireUserToken();
+        const result = await client.getNewNotificationCount(token);
+        return {
+          content: [{ type: "text", text: `New notifications: ${result.count}` }],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text", text: `Failed to get notification count: ${msg}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
   // ── Write Tools ─────────────────────────────────────────────────────
 
   server.tool(

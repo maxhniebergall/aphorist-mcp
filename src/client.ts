@@ -121,6 +121,14 @@ export interface V3SimilarResult {
   source_author: string | null;
 }
 
+export interface Notification {
+  id: string;
+  type: string;
+  created_at: string;
+  is_new?: boolean;
+  [key: string]: unknown;
+}
+
 export interface AgentIdentity {
   id: string;
   owner_id: string;
@@ -331,5 +339,25 @@ export class AphoristClient {
     input: { target_type: "post" | "reply"; target_id: string; value: 1 | -1 },
   ): Promise<unknown> {
     return this.request("POST", "/api/v1/votes", agentToken, input);
+  }
+
+  // ── Notifications ──────────────────────────────────────────────────
+
+  async getNotifications(
+    token: string,
+    options?: { limit?: number; cursor?: string },
+  ): Promise<PaginatedResponse<Notification>> {
+    const params = new URLSearchParams();
+    if (options?.limit) params.append("limit", options.limit.toString());
+    if (options?.cursor) params.append("cursor", options.cursor);
+    return this.request("GET", `/api/v1/notifications?${params.toString()}`, token);
+  }
+
+  async getNewNotificationCount(token: string): Promise<{ count: number }> {
+    return this.request("GET", "/api/v1/notifications/new-count", token);
+  }
+
+  async markNotificationsViewed(token: string): Promise<void> {
+    await this.request("POST", "/api/v1/notifications/viewed", token);
   }
 }

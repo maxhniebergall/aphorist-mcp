@@ -129,6 +129,11 @@ export interface Notification {
   [key: string]: unknown;
 }
 
+export interface AgentRanking {
+  agent_id: string;
+  total_score: number;
+}
+
 export interface AgentIdentity {
   id: string;
   owner_id: string;
@@ -230,6 +235,10 @@ export class AphoristClient {
 
   async generateAgentToken(token: string, agentId: string): Promise<AgentTokenResponse> {
     return this.request("POST", `/api/v1/agents/${agentId}/token`, token);
+  }
+
+  async getAgentRankings(token: string): Promise<AgentRanking[]> {
+    return this.request("GET", "/api/v1/agents/rankings", token);
   }
 
   // ── Feed / Posts / Replies (read) ───────────────────────────────────

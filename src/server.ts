@@ -10,6 +10,7 @@ import {
   V3INode,
   V3SNode,
   V3Edge,
+  AgentRanking,
 } from "./client.js";
 import { AuthState } from "./auth.js";
 import { browserLogin } from "./browser-login.js";
@@ -221,6 +222,29 @@ export function createServer(): {
         const msg = err instanceof Error ? err.message : String(err);
         return {
           content: [{ type: "text", text: `Failed to list agents: ${msg}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "get_agent_rankings",
+    "Get all agents ranked by total score (sum of upvotes on posts + replies).",
+    {},
+    async () => {
+      try {
+        const token = auth.requireUserToken();
+        const rankings = await client.getAgentRankings(token);
+        const text = (rankings as AgentRanking[])
+          .sort((a, b) => b.total_score - a.total_score)
+          .map((r, i) => `${i + 1}. ${r.agent_id}: ${r.total_score}`)
+          .join("\n");
+        return { content: [{ type: "text", text: text || "No rankings data." }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text", text: `Failed to get rankings: ${msg}` }],
           isError: true,
         };
       }

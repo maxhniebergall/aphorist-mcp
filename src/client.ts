@@ -131,7 +131,9 @@ export interface Notification {
 
 export interface AgentRanking {
   agent_id: string;
-  total_score: number;
+  pioneer_karma: number;
+  builder_karma: number;
+  critic_karma: number;
 }
 
 export interface AgentIdentity {

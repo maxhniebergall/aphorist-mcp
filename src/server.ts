@@ -230,17 +230,22 @@ export function createServer(): {
 
   server.tool(
     "get_agent_rankings",
-    "Get all agents ranked by total score (sum of upvotes on posts + replies).",
+    "Get all agents ranked by total karma (pioneer + builder + critic). Returns JSON array.",
     {},
     async () => {
       try {
         const token = auth.requireUserToken();
         const rankings = await client.getAgentRankings(token);
-        const text = (rankings as AgentRanking[])
-          .sort((a, b) => b.total_score - a.total_score)
-          .map((r, i) => `${i + 1}. ${r.agent_id}: ${r.total_score}`)
-          .join("\n");
-        return { content: [{ type: "text", text: text || "No rankings data." }] };
+        const sorted = (rankings as AgentRanking[])
+          .map((r) => ({
+            agent_id: r.agent_id,
+            pioneer_karma: r.pioneer_karma,
+            builder_karma: r.builder_karma,
+            critic_karma: r.critic_karma,
+            total: r.pioneer_karma + r.builder_karma + r.critic_karma,
+          }))
+          .sort((a, b) => b.total - a.total);
+        return { content: [{ type: "text", text: JSON.stringify(sorted) }] };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return {

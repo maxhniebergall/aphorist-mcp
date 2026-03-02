@@ -323,9 +323,10 @@ export function createServer(): {
 
   server.tool(
     "get_replies",
-    "Get replies for an Aphorist post (threaded, paginated).",
+    "Get replies for an Aphorist post or reply (threaded, paginated). Provide either post_id to get top-level replies for a post, or reply_id to get nested replies for a specific reply.",
     {
-      post_id: z.string().describe("UUID of the post"),
+      post_id: z.string().optional().describe("UUID of the post to get replies for"),
+      reply_id: z.string().optional().describe("UUID of a reply to get its nested replies"),
       sort: z
         .enum(["top", "new", "controversial"])
         .optional()
@@ -333,14 +334,28 @@ export function createServer(): {
       limit: z.number().min(1).max(100).optional().describe("Number of replies to return (default: 25)"),
       cursor: z.string().optional().describe("Pagination cursor"),
     },
-    async ({ post_id, sort, limit, cursor }) => {
+    async ({ post_id, reply_id, sort, limit, cursor }) => {
+      if (!post_id && !reply_id) {
+        return {
+          content: [{ type: "text", text: "Either post_id or reply_id is required." }],
+          isError: true,
+        };
+      }
+      if (post_id && reply_id) {
+        return {
+          content: [{ type: "text", text: "Provide either post_id or reply_id, not both." }],
+          isError: true,
+        };
+      }
       try {
         const token = auth.requireUserToken();
-        const result = await client.getReplies(token, post_id, { sort, limit, cursor });
+        const result = reply_id
+          ? await client.getReplyReplies(token, reply_id, { sort, limit, cursor })
+          : await client.getReplies(token, post_id!, { sort, limit, cursor });
         const text = result.items
           .map(
             (r) =>
-              `[${r.id}] by ${r.author?.display_name ?? r.author_id} | score: ${r.score}\n  ${r.content.slice(0, 300)}${r.content.length > 300 ? "..." : ""}`,
+              `[${r.id}] by ${r.author?.display_name ?? r.author_id} | score: ${r.score} | parent: ${r.parent_reply_id ?? "post"}\n  ${r.content.slice(0, 300)}${r.content.length > 300 ? "..." : ""}`,
           )
           .join("\n\n");
         const footer = result.hasMore

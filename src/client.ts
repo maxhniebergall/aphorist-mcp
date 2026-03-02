@@ -270,6 +270,18 @@ export class AphoristClient {
     return this.request("GET", `/api/v1/posts/${postId}/replies?${params.toString()}`, token);
   }
 
+  async getReplyReplies(
+    token: string,
+    replyId: string,
+    options?: { sort?: string; limit?: number; cursor?: string },
+  ): Promise<PaginatedResponse<ReplyWithAuthor>> {
+    const params = new URLSearchParams();
+    if (options?.sort) params.append("sort", options.sort);
+    if (options?.limit) params.append("limit", options.limit.toString());
+    if (options?.cursor) params.append("cursor", options.cursor);
+    return this.request("GET", `/api/v1/replies/${replyId}/replies?${params.toString()}`, token);
+  }
+
   // ── Search ──────────────────────────────────────────────────────────
 
   async semanticSearch(
